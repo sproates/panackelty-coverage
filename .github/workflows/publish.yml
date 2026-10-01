@@ -1,0 +1,109 @@
+name: Coverage Pages
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: coverage-${{ github.event_name == 'pull_request' && github.ref || 'production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      publish: ${{ steps.source.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: node --test tests/*.test.cjs
+      - name: Select successful public core coverage
+        id: source
+        uses: actions/github-script@v8
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+        with:
+          script: |
+            const fs=require('node:fs');
+            const {select,needsPublish}=require('./scripts/source.cjs');
+            const source=await select(github);
+            fs.writeFileSync('selection.json',JSON.stringify(source));
+            core.setOutput('run',String(source.check_run));
+            core.setOutput('name',`native-coverage-${source.check_run}`);
+            const changed=process.env.IS_PR==='true' || await needsPublish(source,'https://sproates.github.io/panackelty-coverage/provenance.json');
+            core.setOutput('publish',String(changed));
+            await core.summary.addHeading('Coverage source').addCodeBlock(JSON.stringify(source,null,2),'json').write();
+      - name: Download exact trusted report
+        if: steps.source.outputs.publish == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          repository: sproates/panackelty
+          run-id: ${{ steps.source.outputs.run }}
+          name: ${{ steps.source.outputs.name }}
+          path: report
+      - name: Build independent report site
+        if: steps.source.outputs.publish == 'true'
+        run: node scripts/report.cjs build report public selection.json
+      - name: Recheck source before publication
+        if: steps.source.outputs.publish == 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const {select,same}=require('./scripts/source.cjs');
+            const pinned=require('./selection.json');
+            if(!same(pinned,await select(github))) throw new Error('Coverage advanced during preparation; retry');
+      - uses: actions/upload-artifact@v7
+        if: steps.source.outputs.publish == 'true' && github.event_name == 'pull_request'
+        with:
+          name: coverage-preview
+          path: public
+          retention-days: 7
+      - uses: actions/upload-pages-artifact@v5
+        if: steps.source.outputs.publish == 'true' && github.event_name != 'pull_request'
+        with:
+          path: public
+  deploy:
+    if: github.event_name != 'pull_request' && needs.prepare.outputs.publish == 'true'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v5
+        id: deployment
+  verify:
+    needs: deploy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: github-pages
+          path: artifact
+      - name: Verify every live report file
+        run: |
+          mkdir expected
+          tar -xf artifact/artifact.tar -C expected
+          for attempt in 1 2 3 4 5; do
+            if node scripts/report.cjs verify expected https://sproates.github.io/panackelty-coverage/; then exit 0; fi
+            sleep 10
+          done
+          exit 1
