@@ -37,6 +37,7 @@ jobs:
           script: |
             const fs=require('node:fs');
             const {select,needsPublish}=require('./scripts/source.cjs');
+            const {presentationNeedsPublish}=require('./scripts/report.cjs');
             const [source,panack]=await Promise.all([select(github),select(github,'source')]);
             fs.writeFileSync('selection.json',JSON.stringify(source));
             fs.writeFileSync('source-selection.json',JSON.stringify(panack));
@@ -46,7 +47,8 @@ jobs:
             core.setOutput('source-name',`source-coverage-${panack.check_run}`);
             const changes=process.env.IS_PR==='true' ? [true,true] : await Promise.all([
               needsPublish(source,'https://sproates.github.io/panackelty-coverage/provenance.json'),
-              needsPublish(panack,'https://sproates.github.io/panackelty-coverage/source/provenance.json')]);
+              needsPublish(panack,'https://sproates.github.io/panackelty-coverage/source/provenance.json'),
+              presentationNeedsPublish('https://sproates.github.io/panackelty-coverage/presentation.json')]);
             const changed=changes.some(Boolean);
             core.setOutput('publish',String(changed));
             await core.summary.addHeading('Independent coverage sources').addCodeBlock(JSON.stringify({native:source,panack},null,2),'json').write();
