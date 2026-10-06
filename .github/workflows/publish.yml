@@ -37,6 +37,7 @@ jobs:
           script: |
             const fs=require('node:fs');
             const {select,needsPublish}=require('./scripts/source.cjs');
+            const {presentationNeedsPublish}=require('./scripts/report.cjs');
             const [source,panack]=await Promise.all([select(github),select(github,'source')]);
             fs.writeFileSync('selection.json',JSON.stringify(source));
             fs.writeFileSync('source-selection.json',JSON.stringify(panack));
@@ -45,8 +46,9 @@ jobs:
             core.setOutput('source-run',String(panack.check_run));
             core.setOutput('source-name',`source-coverage-${panack.check_run}`);
             const changes=process.env.IS_PR==='true' ? [true,true] : await Promise.all([
-              needsPublish(source,'https://sproates.github.io/panackelty-coverage/provenance.json'),
-              needsPublish(panack,'https://sproates.github.io/panackelty-coverage/source/provenance.json')]);
+              needsPublish(source,'https://coverage.panackelty.com/provenance.json'),
+              needsPublish(panack,'https://coverage.panackelty.com/source/provenance.json'),
+              presentationNeedsPublish('https://coverage.panackelty.com/presentation.json')]);
             const changed=changes.some(Boolean);
             core.setOutput('publish',String(changed));
             await core.summary.addHeading('Independent coverage sources').addCodeBlock(JSON.stringify({native:source,panack},null,2),'json').write();
@@ -120,7 +122,7 @@ jobs:
           mkdir expected
           tar -xf artifact/artifact.tar -C expected
           for attempt in 1 2 3 4 5; do
-            if node scripts/report.cjs verify expected https://sproates.github.io/panackelty-coverage/; then exit 0; fi
+            if node scripts/report.cjs verify expected https://coverage.panackelty.com/; then exit 0; fi
             sleep 10
           done
           exit 1

@@ -1,6 +1,6 @@
 # Panackelty coverage
 
-Independent GitHub Pages hosting at https://sproates.github.io/panackelty-coverage/.
+Independent GitHub Pages hosting at https://coverage.panackelty.com/.
 Two separately identified reports: native C/LLVM on core `main`, and the initial
 `.panack` compiler/bytecode/stdlib source baseline on core **`next`**. Neither
 report measures browser/WASI execution or implies whole-language coverage.
@@ -34,9 +34,12 @@ entering it and is checked again after download/build. Live provenance prevents
 older reports replacing newer ones independently per channel; exact duplicate
 pairs skip deployment. Both pinned artifacts are downloaded and validated on
 either channel update, so a source update cannot erase the native report.
-Errors preserve the currently deployed site. Publisher code updates with an
-identical report also skip deployment; use a newer source report for a changed
-landing page. A dedicated force-refresh option is not provided in this slice.
+Errors preserve the currently deployed site. The generated presentation.json
+identifies renderer and stylesheet content. Changed presentation triggers
+deployment even when report identities are unchanged; exact duplicates of all
+three identities skip deployment. Styling requires no new core collection.
+Report data, denominators, scope and independent provenance are retained.
+The overview and detailed reports use the main website’s visual design.
 
 PRs test selection and generate a preview artifact but cannot deploy. Production
 uploads only the generated report, deploys through this repository's `github-pages`
@@ -56,3 +59,7 @@ SC5 adds source reporting without changing the main website or core `main`.
 See sproates/panackelty#131 and sproates/panackelty#187.
 Independent hosting supersedes the planned combined-site coverage refresh work;
 it does not by itself establish the website's latency budgets.
+
+For an immediate refresh, start a fresh Coverage Pages workflow_dispatch on main.
+Do not rerun an old production preparation: duplicate github-pages artifacts in
+one run can make deploy-pages reject an ambiguous artifact selection.

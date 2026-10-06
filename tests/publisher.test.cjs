@@ -2,7 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {select,validate,same,needsPublish}=require('../scripts/source.cjs');
-const {build,sourceSummary,buildDual,inspect,verify}=require('../scripts/report.cjs');
+const {build,sourceSummary,buildDual,inspect,verify,presentationIdentity,presentationNeedsPublish}=require('../scripts/report.cjs');
 const {createHash}=require('node:crypto');
 const run=(id,extra={})=>({id,run_number:id,run_attempt:1,head_sha:String(id).padStart(40,'a'),event:'push',head_branch:'main',status:'completed',conclusion:'success',path:'.github/workflows/check.yml',repository:{full_name:'sproates/panackelty'},head_repository:{full_name:'sproates/panackelty'},...extra});
 const artifact=(id,extra={})=>({id:id+100,name:`native-coverage-${id}`,created_at:'2026-10-01T21:06:19Z',expired:false,...extra});
@@ -54,8 +54,8 @@ function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'coverage-pages-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const input=path.join(root,'report');fs.mkdirSync(path.join(input,'html'),{recursive:true});
   fs.writeFileSync(path.join(input,'summary.txt'),'Lines: 95%\n');
-  fs.writeFileSync(path.join(input,'html/index.html'),'<a href="source.html">Source</a><link href="style.css">');
-  fs.writeFileSync(path.join(input,'html/source.html'),'<a href="index.html">Index</a>');
+  fs.writeFileSync(path.join(input,'html/index.html'),'<html><head><link href="style.css"></head><body><a href="source.html">Source</a></body></html>');
+  fs.writeFileSync(path.join(input,'html/source.html'),'<html><head></head><body><a href="index.html">Index</a></body></html>');
   fs.writeFileSync(path.join(input,'html/style.css'),'body{color:black}');
   return {root,input,output:path.join(root,'public')};
 }
@@ -119,7 +119,7 @@ function sourceFixture(t) {
   const report={schema:1,repository:selection.repository,branch:'next',commit:selection.coverage_sha,clean:true,generatedAt:selection.archived_at,compiler:'a'.repeat(64),vm:'b'.repeat(64),manifestHash:createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),manifest,
     sessions:[{id:'scope',nonce:'1'.repeat(32),executions:1,artifact:'a'.repeat(64),inventory:'b'.repeat(64)}],metrics,components:{compiler:metrics,bytecode:empty,stdlib:empty},
     files:[{path:'src/compiler/main.panack',hash:'c'.repeat(64),lines:{1:'unavailable'},functions:[{id:'declaration/0',state:'zero'}],branches:[],exclusions:[],metrics}]};
-  fs.writeFileSync(path.join(source,'summary.txt'),'Source scope summary\n');fs.writeFileSync(path.join(source,'summary.json'),JSON.stringify(report));fs.writeFileSync(path.join(source,'html/index.html'),'<a href="../summary.json">Scope</a>');
+  fs.writeFileSync(path.join(source,'summary.txt'),'Source scope summary\n');fs.writeFileSync(path.join(source,'summary.json'),JSON.stringify(report));fs.writeFileSync(path.join(source,'html/index.html'),'<html><head></head><body><a href="../summary.json">Scope</a></body></html>');
   return {root,input,source,output,report};
 }
 test('dual publication preserves native URLs and exposes separately pinned next source report',t=>{
@@ -128,6 +128,21 @@ test('dual publication preserves native URLs and exposes separately pinned next 
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output,'provenance.json'))),selection);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output,'source/provenance.json'))),sourceSelection);
   assert.match(fs.readFileSync(path.join(output,'index.html'),'utf8'),/source\/html\/index.html/);inspect(output);
+  const overview=fs.readFileSync(path.join(output,'index.html'),'utf8');
+  assert.match(overview,/Test coverage/);assert.match(overview,/Unavailable/);
+  assert.doesNotMatch(overview,/NaN|undefined/);
+  assert.match(fs.readFileSync(path.join(output,'source/html/index.html'),'utf8'),/\.\.\/\.\.\/assets\/coverage.css/);
+  assert.match(fs.readFileSync(path.join(output,'html/source.html'),'utf8'),/class="report-detail"/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output,'source/summary.json'))),JSON.parse(fs.readFileSync(path.join(source,'summary.json'))));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output,'presentation.json'))),presentationIdentity());
+});
+test('presentation changes publish independently without lowering report freshness',async()=>{
+  const response=(value,status=200)=>async()=>({status,ok:status===200,json:async()=>value});
+  assert.equal(await presentationNeedsPublish('unused',response(null,404)),true);
+  assert.equal(await presentationNeedsPublish('unused',response(presentationIdentity())),false);
+  assert.equal(await presentationNeedsPublish('unused',response({schema:1,hash:'0'.repeat(64)})),true);
+  await assert.rejects(presentationNeedsPublish('unused',response({},500)),/Cannot read/);
+  await assert.rejects(presentationNeedsPublish('unused',response({schema:1,hash:'bad'})),/Invalid/);
 });
 test('malformed, stale, incomplete or dishonest source summaries cannot replace native site',t=>{
   const {source,report}=sourceFixture(t);

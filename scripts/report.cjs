@@ -2,6 +2,48 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {createHash}=require('node:crypto');
 const {validate}=require('./source.cjs');
+function presentationIdentity() {
+  const hash=createHash('sha256');
+  for(const file of [__filename,path.join(__dirname,'../assets/coverage.css')]) hash.update(fs.readFileSync(file));
+  return {schema:1,hash:hash.digest('hex')};
+}
+async function presentationNeedsPublish(url,fetcher=fetch) {
+  const response=await fetcher(url,{signal:AbortSignal.timeout(15000),cache:'no-store'});
+  if(response.status===404) return true;
+  if(!response.ok) throw new Error('Cannot read live presentation identity');
+  const live=await response.json();
+  if(live.schema!==1 || !/^[a-f0-9]{64}$/.test(live.hash)) throw new Error('Invalid presentation identity');
+  return live.hash!==presentationIdentity().hash;
+}
+const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function header(home='index.html') {
+  return `<a class="skip-link" href="#main">Skip to content</a><header class="site-header"><a class="brand" href="https://panackelty.com/"><span class="brand-mark" aria-hidden="true">P</span><span>Panackelty</span></a><nav aria-label="Main navigation"><a href="https://panackelty.com/capabilities/">Capabilities</a><a href="https://panackelty.com/playground/">Try it online</a><a href="${home}" aria-current="page">Test coverage</a><a href="https://github.com/sproates/panackelty">GitHub</a></nav></header>`;
+}
+function provenance(s,prefix) {
+  return `<p class="provenance">Report archived <time datetime="${s.archived_at}">${s.archived_at.replace('T',' ').replace('Z',' UTC')}</time><br>Source <a href="https://github.com/sproates/panackelty/commit/${s.coverage_sha}"><code>${s.coverage_sha.slice(0,7)}</code></a> · <a href="https://github.com/sproates/panackelty/actions/runs/${s.check_run}">Passed validation</a> · <a href="${prefix}provenance.json">Provenance</a></p>`;
+}
+function metric(label,value,count='') {
+  return `<div><span class="metric-value">${escape(value)}</span><span class="metric-label">${label}${count?`<br>${escape(count)}`:''}</span></div>`;
+}
+function sourceMetric(label,m) {
+  return metric(label,m.percent===null?'Unavailable':m.percent.toFixed(2)+'%',`${m.covered.toLocaleString('en-US')} / ${m.total.toLocaleString('en-US')}`);
+}
+function landing(native,source,report,summary) {
+  const percentages=summary.split('\n').find(line=>/^TOTAL\s/.test(line))?.match(/[0-9.]+%/g);
+  const nativeMetrics=percentages?.length===4?metric('Lines',percentages[2])+metric('Functions',percentages[1])+metric('Branch outcomes',percentages[3]):'<p>Exact native figures are available in the report below.</p>';
+  const sourceCard=report?`<section class="report-card" aria-labelledby="source-title"><span class="badge">.PANACK SOURCE · NEXT</span><h2 id="source-title">The language, measured.</h2><p>Execution coverage for the compiler, bytecode tooling and standard library. ${report.files.length} production files across ${report.sessions.reduce((n,s)=>n+s.executions,0)} fresh executions.</p><div class="metrics">${sourceMetric('Executable start lines',report.metrics.lines)}${sourceMetric('Functions',report.metrics.functions)}${sourceMetric('Source outcomes',report.metrics.branches)}</div><div class="actions"><a class="button primary" href="source/html/index.html">Explore source coverage →</a><a class="button" href="source/summary.json">Figures and test scope</a></div><div class="table-wrap"><table><caption class="eyebrow">Coverage by component</caption><thead><tr><th scope="col">Component</th><th scope="col">Lines</th><th scope="col">Functions</th><th scope="col">Source outcomes</th></tr></thead><tbody>${Object.entries(report.components).map(([name,m])=>`<tr><th scope="row">${escape(name==='stdlib'?'Standard library':name[0].toUpperCase()+name.slice(1))}</th>${['lines','functions','branches'].map(k=>`<td>${m[k].percent===null?'Unavailable':m[k].percent.toFixed(2)+'%'} <span>(${m[k].covered}/${m[k].total})</span></td>`).join('')}</tr>`).join('')}</tbody></table></div>${provenance(source,'source/')}</section>`:'';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#15130f"><meta name="description" content="Panackelty test coverage for compiler, bytecode tooling, standard library and native C VM."><title>Test coverage · Panackelty</title><link rel="stylesheet" href="assets/coverage.css"></head><body>${header()}<main id="main"><section class="hero"><p class="eyebrow">Engineering evidence</p><h1>Test coverage.<br><em>With context.</em></h1><p class="lede">See what the tests execute, where gaps remain, and which revision each report describes.</p></section>${sourceCard}<section class="report-card" aria-labelledby="native-title"><span class="badge">NATIVE C VM · MAIN</span><h2 id="native-title">The runtime, measured.</h2><p>LLVM coverage of the native C VM: execution, memory handling and host operations. This report does not measure the self-hosted compiler or the whole language.</p><div class="metrics">${nativeMetrics}</div><div class="actions"><a class="button primary" href="html/index.html">Explore native VM coverage →</a><a class="button" href="summary.txt">Text summary</a></div>${provenance(native,'')}</section><aside class="scope-note"><h2>Read the numbers with their scope.</h2><p>The two reports measure different code and can describe different commits. Source coverage uses an explicit native test corpus; it does not cover the whole canonical suite or browser/WASI execution. Missing measurements are unavailable, never fabricated zeroes. Coverage measures execution, not assertion quality or freedom from defects.</p><p>Reports are published independently from the website. Their timestamps, source commits and validation links make freshness visible.</p></aside></main><footer><a class="brand" href="https://panackelty.com/"><span class="brand-mark" aria-hidden="true">P</span><span>Panackelty</span></a><p>Experimental. Open source. Still evolving.</p><p><a href="https://github.com/sproates/panackelty/blob/main/LICENSE">MIT</a> · <a href="https://github.com/sproates/panackelty">GitHub</a> · <a href="#main">Back to top</a></p></footer></body></html>\n`;
+}
+function themeReports(output,dir) {
+  for(const file of inspect(output).filter(f=>f.startsWith(dir+'/')&&f.endsWith('.html'))) {
+    const full=path.join(output,file),relative=target=>path.posix.relative(path.posix.dirname(file),target);
+    let html=fs.readFileSync(full,'utf8');
+    html=html.replace('</head>',`<link rel="stylesheet" href="${relative('assets/coverage.css')}"></head>`)
+      .replace(/<body>/i,`<body class="report-detail">${header(relative('index.html'))}<main id="main">`)
+      .replace('</body>','</main></body>');
+    fs.writeFileSync(full,html);
+  }
+}
 function inspect(root) {
   if(!fs.lstatSync(root).isDirectory() || fs.lstatSync(root).isSymbolicLink()) throw new Error('Unsafe report root');
   const files=[];let bytes=0;
@@ -40,16 +82,10 @@ function build(input,output,selection) {
   fs.cpSync(path.join(input,'html'),path.join(output,'html'),{recursive:true});
   fs.copyFileSync(path.join(input,'summary.txt'),path.join(output,'summary.txt'));
   fs.writeFileSync(path.join(output,'provenance.json'),JSON.stringify(selection,null,2)+'\n');
-  fs.writeFileSync(path.join(output,'index.html'),`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Panackelty native VM coverage</title><style>body{font:18px/1.6 system-ui;max-width:64rem;margin:3rem auto;padding:0 1.5rem;color:#222}a{color:#0755a3}code{overflow-wrap:anywhere}</style></head>
-<body><main><p><a href="https://panackelty.com/">Panackelty</a></p><h1>Native VM test coverage</h1>
-<p>LLVM line and branch coverage of the native C VM. This report does not measure the self-hosted compiler or the whole language.</p>
-<p><a href="html/index.html">Browse source coverage</a> · <a href="summary.txt">Coverage summary</a></p>
-<p>Report archived: <time>${selection.archived_at}</time></p>
-<p>Source: <a href="https://github.com/sproates/panackelty/commit/${selection.coverage_sha}"><code>${selection.coverage_sha}</code></a></p>
-<p><a href="https://github.com/sproates/panackelty/actions/runs/${selection.check_run}">Successful validation run</a> · <a href="provenance.json">Report provenance</a></p>
-<p>Published independently of the main website. This is the latest successfully published report; check its timestamp and source when assessing freshness.</p></main></body></html>\n`);
+  fs.mkdirSync(path.join(output,'assets'),{recursive:true});
+  fs.copyFileSync(path.join(__dirname,'../assets/coverage.css'),path.join(output,'assets/coverage.css'));
+  fs.writeFileSync(path.join(output,'presentation.json'),JSON.stringify(presentationIdentity())+'\n');
+  fs.writeFileSync(path.join(output,'index.html'),landing(selection,null,null,fs.readFileSync(path.join(input,'summary.txt'),'utf8')));
   inspect(output);
 }
 function sourceSummary(input,selection) {
@@ -109,8 +145,10 @@ function buildDual(nativeInput,sourceInput,output,nativeSelection,sourceSelectio
   build(nativeInput,output,nativeSelection);
   fs.cpSync(sourceInput,path.join(output,'source'),{recursive:true});
   fs.writeFileSync(path.join(output,'source/provenance.json'),JSON.stringify(sourceSelection,null,2)+'\n');
-  const index=path.join(output,'index.html');
-  fs.writeFileSync(index,fs.readFileSync(index,'utf8').replace('</main>',`<hr><h2>Panackelty source coverage — next</h2><p>Compiler, bytecode tooling and standard library .panack source execution in the explicitly scoped native baseline. This development-branch report is separate from native C/main; it does not measure browser/WASI execution or the whole test suite.</p><p><a href="source/html/index.html">Browse .panack source coverage</a> · <a href="source/summary.json">Figures and exact scope</a> · <a href="source/provenance.json">Source report provenance</a></p><p>Source: <a href="https://github.com/sproates/panackelty/commit/${sourceSelection.coverage_sha}">${sourceSelection.coverage_sha}</a>; archived ${sourceSelection.archived_at}. <a href="https://github.com/sproates/panackelty/actions/runs/${sourceSelection.check_run}">Successful next validation</a>.</p></main>`));
+  const report=sourceSummary(sourceInput,sourceSelection);
+  fs.writeFileSync(path.join(output,'index.html'),landing(nativeSelection,sourceSelection,report,fs.readFileSync(path.join(nativeInput,'summary.txt'),'utf8')));
+  themeReports(output,'html');
+  themeReports(output,'source/html');
   inspect(output);
 }
 async function verify(root,base) {
@@ -120,7 +158,7 @@ async function verify(root,base) {
     if(!response.ok || !Buffer.from(await response.arrayBuffer()).equals(fs.readFileSync(path.join(root,file)))) throw new Error(`Published mismatch: ${file}`);
   }
 }
-module.exports={inspect,build,sourceSummary,buildDual,verify};
+module.exports={inspect,build,sourceSummary,buildDual,verify,presentationIdentity,presentationNeedsPublish};
 if(require.main===module) {
   const [mode,a,b,c,d,e]=process.argv.slice(2);
   Promise.resolve().then(()=>{
