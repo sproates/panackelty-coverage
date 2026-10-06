@@ -1,7 +1,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {select,validate,same,needsPublish}=require('../scripts/source.cjs');
+const {select,validate,same,needsPublish,publicationDecision}=require('../scripts/source.cjs');
 const {build,sourceSummary,buildDual,inspect,verify,presentationIdentity,presentationNeedsPublish}=require('../scripts/report.cjs');
 const {createHash}=require('node:crypto');
 const run=(id,extra={})=>({id,run_number:id,run_attempt:1,head_sha:String(id).padStart(40,'a'),event:'push',head_branch:'main',status:'completed',conclusion:'success',path:'.github/workflows/check.yml',repository:{full_name:'sproates/panackelty'},head_repository:{full_name:'sproates/panackelty'},...extra});
@@ -39,16 +39,31 @@ test('provenance validation rejects unsafe metadata',()=>{
   validate(selection);
   for(const bad of [{schema:2},{repository:'fork/repo'},{coverage_sha:'<script>'},{artifact_id:-1},{run_attempt:0},{archived_at:'bad'}]) assert.throws(()=>validate({...selection,...bad}),/Invalid/);
 });
-test('duplicate report skipped, newer restored, bootstrap permitted, rollback rejected',async()=>{
+test('duplicate report skipped, newer selected, bootstrap permitted, and a newer live report blocks the whole publish',async()=>{
   const response=(live,status=200)=>async()=>({status,ok:status===200,json:async()=>live});
-  assert.equal(await needsPublish(selection,'unused',response(null,404)),true);
-  assert.equal(await needsPublish(selection,'unused',response(selection)),false);
-  assert.equal(await needsPublish({...selection,run_number:6},'unused',response(selection)),true);
-  await assert.rejects(needsPublish(selection,'unused',response({...selection,run_number:6})),/rollback/);
-  await assert.rejects(needsPublish(selection,'unused',response({...selection,run_attempt:2})),/rollback/);
+  assert.deepEqual(await needsPublish(selection,'unused',response(null,404)),{publish:true,reason:'missing',live:null});
+  assert.deepEqual(await needsPublish(selection,'unused',response(selection)),{publish:false,reason:null,live:selection});
+  assert.equal((await needsPublish({...selection,run_number:6},'unused',response(selection))).publish,true);
+  const newer={...selection,run_number:6};
+  assert.deepEqual(await needsPublish(selection,'unused',response(newer)),{publish:false,reason:'live-newer',live:newer});
+  const newerAttempt={...selection,run_attempt:2};
+  assert.equal((await needsPublish(selection,'unused',response(newerAttempt))).reason,'live-newer');
   await assert.rejects(needsPublish(selection,'unused',response({},500)),/Cannot read/);
   await assert.rejects(needsPublish(selection,'unused',response({})),/Invalid/);
   assert.equal(same(selection,{...selection,artifact_id:106}),false);
+});
+test('a newer live channel blocks publication even when another report or presentation changed',()=>{
+  const liveNewer={...sourceSelection,run_number:6};
+  const blocked=publicationDecision([
+    {publish:true,reason:null},
+    {publish:false,reason:'live-newer',live:liveNewer},
+    {publish:true,reason:null},
+  ]);
+  assert.equal(blocked.publish,false);
+  assert.equal(blocked.newerLive.length,1);
+  assert.equal(blocked.newerLive[0].index,1);
+  assert.equal(publicationDecision([{publish:true,reason:null},{publish:false,reason:null},{publish:false,reason:null}]).publish,true);
+  assert.equal(publicationDecision([true,true]).publish,true);
 });
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'coverage-pages-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
@@ -87,6 +102,8 @@ test('workflow never deploys a PR and cross-repo artifact identity is pinned',()
   assert.match(workflow,/if: github.event_name != 'pull_request' && needs.prepare.outputs.publish == 'true'/);
   assert.match(workflow,/cancel-in-progress: \$\{\{ github.event_name == 'pull_request' \}\}/);
   assert.match(workflow,/Coverage advanced during preparation/);
+  assert.match(workflow,/publicationDecision\(changes\)/);
+  assert.match(workflow,/preserve the live/);
   assert.doesNotMatch(workflow,/secrets\.|contents: write/);
 });
 const sourceSelection={...selection,schema:2,branch:'next',kind:'panack-source'};
@@ -104,8 +121,8 @@ test('source channel selects only successful trusted next pushes and exact sourc
 });
 test('source freshness and rollback are independent of native main provenance',async()=>{
   const response=live=>async()=>({status:200,ok:true,json:async()=>live});
-  assert.equal(await needsPublish(sourceSelection,'unused',response(sourceSelection)),false);
-  await assert.rejects(needsPublish(sourceSelection,'unused',response({...sourceSelection,run_number:6})),/rollback/);
+  assert.equal((await needsPublish(sourceSelection,'unused',response(sourceSelection))).publish,false);
+  assert.equal((await needsPublish(sourceSelection,'unused',response({...sourceSelection,run_number:6}))).reason,'live-newer');
   await assert.rejects(needsPublish(sourceSelection,'unused',response(selection)),/channel/);
   for(const bad of [{branch:'main'},{kind:'native'},{schema:3}]) assert.throws(()=>validate({...sourceSelection,...bad}),/Invalid/);
 });

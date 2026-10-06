@@ -32,9 +32,11 @@ pipeline deliberately exercises that actual download before deployment approval.
 Runs serialize under one production concurrency group. Selection happens after
 entering it and is checked again after download/build. Live provenance prevents
 older reports replacing newer ones independently per channel; exact duplicate
-pairs skip deployment. Both pinned artifacts are downloaded and validated on
-either channel update, so a source update cannot erase the native report.
-Errors preserve the currently deployed site. The generated presentation.json
+pairs skip deployment. If either live channel appears newer than its selected
+source, the whole publication is skipped with a warning, preserving both live
+reports while keeping the scheduled check green. Both pinned artifacts are
+downloaded and validated on either channel update, so a source update cannot
+erase the native report. Errors preserve the currently deployed site. The generated presentation.json
 identifies renderer and stylesheet content. Changed presentation triggers
 deployment even when report identities are unchanged; exact duplicates of all
 three identities skip deployment. Styling requires no new core collection.

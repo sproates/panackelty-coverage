@@ -36,7 +36,7 @@ jobs:
         with:
           script: |
             const fs=require('node:fs');
-            const {select,needsPublish}=require('./scripts/source.cjs');
+            const {select,needsPublish,publicationDecision}=require('./scripts/source.cjs');
             const {presentationNeedsPublish}=require('./scripts/report.cjs');
             const [source,panack]=await Promise.all([select(github),select(github,'source')]);
             fs.writeFileSync('selection.json',JSON.stringify(source));
@@ -48,10 +48,14 @@ jobs:
             const changes=process.env.IS_PR==='true' ? [true,true] : await Promise.all([
               needsPublish(source,'https://coverage.panackelty.com/provenance.json'),
               needsPublish(panack,'https://coverage.panackelty.com/source/provenance.json'),
-              presentationNeedsPublish('https://coverage.panackelty.com/presentation.json')]);
-            const changed=changes.some(Boolean);
+              presentationNeedsPublish('https://coverage.panackelty.com/presentation.json').then(publish=>({publish,reason:null}))]);
+            const {publish:changed,newerLive}=publicationDecision(changes);
+            for(const {decision,index} of newerLive) {
+              const channel=index===0?'native':'source', selected=index===0?source:panack;
+              core.warning(`Skipping publication to preserve the live ${channel} report: live run ${decision.live.run_number}/${decision.live.run_attempt} is newer than selected run ${selected.run_number}/${selected.run_attempt}.`);
+            }
             core.setOutput('publish',String(changed));
-            await core.summary.addHeading('Independent coverage sources').addCodeBlock(JSON.stringify({native:source,panack},null,2),'json').write();
+            await core.summary.addHeading('Independent coverage sources').addCodeBlock(JSON.stringify({native:source,panack,publication:changes},null,2),'json').write();
       - name: Download exact trusted report
         if: steps.source.outputs.publish == 'true'
         uses: actions/download-artifact@v8
