@@ -1,7 +1,7 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-const {select,validate,same,needsPublish}=require('../scripts/source.cjs');
+const {select,validate,same,needsPublish,publicationDecision}=require('../scripts/source.cjs');
 const {build,sourceSummary,buildDual,inspect,verify,presentationIdentity,presentationNeedsPublish}=require('../scripts/report.cjs');
 const {createHash}=require('node:crypto');
 const run=(id,extra={})=>({id,run_number:id,run_attempt:1,head_sha:String(id).padStart(40,'a'),event:'push',head_branch:'main',status:'completed',conclusion:'success',path:'.github/workflows/check.yml',repository:{full_name:'sproates/panackelty'},head_repository:{full_name:'sproates/panackelty'},...extra});
@@ -52,6 +52,19 @@ test('duplicate report skipped, newer selected, bootstrap permitted, and a newer
   await assert.rejects(needsPublish(selection,'unused',response({})),/Invalid/);
   assert.equal(same(selection,{...selection,artifact_id:106}),false);
 });
+test('a newer live channel blocks publication even when another report or presentation changed',()=>{
+  const liveNewer={...sourceSelection,run_number:6};
+  const blocked=publicationDecision([
+    {publish:true,reason:null},
+    {publish:false,reason:'live-newer',live:liveNewer},
+    {publish:true,reason:null},
+  ]);
+  assert.equal(blocked.publish,false);
+  assert.equal(blocked.newerLive.length,1);
+  assert.equal(blocked.newerLive[0].index,1);
+  assert.equal(publicationDecision([{publish:true,reason:null},{publish:false,reason:null},{publish:false,reason:null}]).publish,true);
+  assert.equal(publicationDecision([true,true]).publish,true);
+});
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'coverage-pages-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const input=path.join(root,'report');fs.mkdirSync(path.join(input,'html'),{recursive:true});
@@ -89,7 +102,7 @@ test('workflow never deploys a PR and cross-repo artifact identity is pinned',()
   assert.match(workflow,/if: github.event_name != 'pull_request' && needs.prepare.outputs.publish == 'true'/);
   assert.match(workflow,/cancel-in-progress: \$\{\{ github.event_name == 'pull_request' \}\}/);
   assert.match(workflow,/Coverage advanced during preparation/);
-  assert.match(workflow,/newerLive\.length/);
+  assert.match(workflow,/publicationDecision\(changes\)/);
   assert.match(workflow,/preserve the live/);
   assert.doesNotMatch(workflow,/secrets\.|contents: write/);
 });

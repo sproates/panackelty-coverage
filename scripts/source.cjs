@@ -56,4 +56,8 @@ async function needsPublish(selected, url, fetcher=fetch) {
   }
   return {publish:!same(live,selected),reason:null,live};
 }
-module.exports={select,validate,same,needsPublish};
+function publicationDecision(changes) {
+  const newerLive=changes.slice(0,2).map((decision,index)=>({decision,index})).filter(({decision})=>decision.reason==='live-newer');
+  return {publish:!newerLive.length && changes.some(decision=>decision===true || decision.publish),newerLive};
+}
+module.exports={select,validate,same,needsPublish,publicationDecision};
