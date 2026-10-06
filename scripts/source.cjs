@@ -46,12 +46,14 @@ function same(a,b) {
 }
 async function needsPublish(selected, url, fetcher=fetch) {
   const response=await fetcher(url,{signal:AbortSignal.timeout(15000),cache:'no-store'});
-  if (response.status===404) return true; // First publication only.
+  if (response.status===404) return {publish:true,reason:'missing',live:null}; // First publication only.
   if (!response.ok) throw new Error('Cannot read live coverage provenance');
   const live=await response.json(); validate(live);
   if (live.schema !== selected.schema || live.branch !== selected.branch || live.kind !== selected.kind) throw new Error('Coverage channel mismatch');
   if (live.run_number > selected.run_number ||
-      (live.run_number === selected.run_number && live.run_attempt > selected.run_attempt)) throw new Error('Refusing coverage rollback');
-  return !same(live,selected);
+      (live.run_number === selected.run_number && live.run_attempt > selected.run_attempt)) {
+    return {publish:false,reason:'live-newer',live};
+  }
+  return {publish:!same(live,selected),reason:null,live};
 }
 module.exports={select,validate,same,needsPublish};

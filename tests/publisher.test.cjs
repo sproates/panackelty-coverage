@@ -39,13 +39,15 @@ test('provenance validation rejects unsafe metadata',()=>{
   validate(selection);
   for(const bad of [{schema:2},{repository:'fork/repo'},{coverage_sha:'<script>'},{artifact_id:-1},{run_attempt:0},{archived_at:'bad'}]) assert.throws(()=>validate({...selection,...bad}),/Invalid/);
 });
-test('duplicate report skipped, newer restored, bootstrap permitted, rollback rejected',async()=>{
+test('duplicate report skipped, newer selected, bootstrap permitted, and a newer live report blocks the whole publish',async()=>{
   const response=(live,status=200)=>async()=>({status,ok:status===200,json:async()=>live});
-  assert.equal(await needsPublish(selection,'unused',response(null,404)),true);
-  assert.equal(await needsPublish(selection,'unused',response(selection)),false);
-  assert.equal(await needsPublish({...selection,run_number:6},'unused',response(selection)),true);
-  await assert.rejects(needsPublish(selection,'unused',response({...selection,run_number:6})),/rollback/);
-  await assert.rejects(needsPublish(selection,'unused',response({...selection,run_attempt:2})),/rollback/);
+  assert.deepEqual(await needsPublish(selection,'unused',response(null,404)),{publish:true,reason:'missing',live:null});
+  assert.deepEqual(await needsPublish(selection,'unused',response(selection)),{publish:false,reason:null,live:selection});
+  assert.equal((await needsPublish({...selection,run_number:6},'unused',response(selection))).publish,true);
+  const newer={...selection,run_number:6};
+  assert.deepEqual(await needsPublish(selection,'unused',response(newer)),{publish:false,reason:'live-newer',live:newer});
+  const newerAttempt={...selection,run_attempt:2};
+  assert.equal((await needsPublish(selection,'unused',response(newerAttempt))).reason,'live-newer');
   await assert.rejects(needsPublish(selection,'unused',response({},500)),/Cannot read/);
   await assert.rejects(needsPublish(selection,'unused',response({})),/Invalid/);
   assert.equal(same(selection,{...selection,artifact_id:106}),false);
@@ -87,6 +89,8 @@ test('workflow never deploys a PR and cross-repo artifact identity is pinned',()
   assert.match(workflow,/if: github.event_name != 'pull_request' && needs.prepare.outputs.publish == 'true'/);
   assert.match(workflow,/cancel-in-progress: \$\{\{ github.event_name == 'pull_request' \}\}/);
   assert.match(workflow,/Coverage advanced during preparation/);
+  assert.match(workflow,/newerLive\.length/);
+  assert.match(workflow,/preserve the live/);
   assert.doesNotMatch(workflow,/secrets\.|contents: write/);
 });
 const sourceSelection={...selection,schema:2,branch:'next',kind:'panack-source'};
@@ -104,8 +108,8 @@ test('source channel selects only successful trusted next pushes and exact sourc
 });
 test('source freshness and rollback are independent of native main provenance',async()=>{
   const response=live=>async()=>({status:200,ok:true,json:async()=>live});
-  assert.equal(await needsPublish(sourceSelection,'unused',response(sourceSelection)),false);
-  await assert.rejects(needsPublish(sourceSelection,'unused',response({...sourceSelection,run_number:6})),/rollback/);
+  assert.equal((await needsPublish(sourceSelection,'unused',response(sourceSelection))).publish,false);
+  assert.equal((await needsPublish(sourceSelection,'unused',response({...sourceSelection,run_number:6}))).reason,'live-newer');
   await assert.rejects(needsPublish(sourceSelection,'unused',response(selection)),/channel/);
   for(const bad of [{branch:'main'},{kind:'native'},{schema:3}]) assert.throws(()=>validate({...sourceSelection,...bad}),/Invalid/);
 });
