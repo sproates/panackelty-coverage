@@ -1,6 +1,6 @@
 # Panackelty coverage
 
-Independent GitHub Pages hosting at https://sproates.github.io/panackelty-coverage/.
+Independent GitHub Pages hosting at https://coverage.panackelty.com/.
 Two separately identified reports: native C/LLVM on core `main`, and the initial
 `.panack` compiler/bytecode/stdlib source baseline on core **`next`**. Neither
 report measures browser/WASI execution or implies whole-language coverage.
