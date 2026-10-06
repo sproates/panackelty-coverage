@@ -63,3 +63,5 @@ it does not by itself establish the website's latency budgets.
 For an immediate refresh, start a fresh Coverage Pages workflow_dispatch on main.
 Do not rerun an old production preparation: duplicate github-pages artifacts in
 one run can make deploy-pages reject an ambiguous artifact selection.
+
+The report landing page and detailed reports use the main website’s always-visible primary navigation and further-reading footer. The landing page also uses the editorial exploration links. Presentation identity includes these changes, allowing a chrome-only refresh without regenerating coverage.
