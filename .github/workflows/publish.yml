@@ -1,16 +1,11 @@
 name: Coverage Pages
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: '7,22,37,52 * * * *'
 permissions:
   contents: read
 concurrency:
-  group: coverage-${{ github.event_name == 'pull_request' && github.ref || 'production' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: coverage-production
+  cancel-in-progress: false
 jobs:
   prepare:
     runs-on: ubuntu-24.04
@@ -31,8 +26,6 @@ jobs:
       - name: Select successful public core coverage
         id: source
         uses: actions/github-script@v8
-        env:
-          IS_PR: ${{ github.event_name == 'pull_request' }}
         with:
           script: |
             const fs=require('node:fs');
@@ -45,7 +38,7 @@ jobs:
             core.setOutput('name',`native-coverage-${source.check_run}`);
             core.setOutput('source-run',String(panack.check_run));
             core.setOutput('source-name',`source-coverage-${panack.check_run}`);
-            const changes=process.env.IS_PR==='true' ? [true,true] : await Promise.all([
+            const changes=await Promise.all([
               needsPublish(source,'https://coverage.panackelty.com/provenance.json'),
               needsPublish(panack,'https://coverage.panackelty.com/source/provenance.json'),
               presentationNeedsPublish('https://coverage.panackelty.com/presentation.json').then(publish=>({publish,reason:null}))]);
@@ -87,18 +80,12 @@ jobs:
             const panack=require('./source-selection.json');
             const [nativeLatest,sourceLatest]=await Promise.all([select(github),select(github,'source')]);
             if(!same(pinned,nativeLatest) || !same(panack,sourceLatest)) throw new Error('Coverage advanced during preparation; retry');
-      - uses: actions/upload-artifact@v7
-        if: steps.source.outputs.publish == 'true' && github.event_name == 'pull_request'
-        with:
-          name: coverage-preview
-          path: public
-          retention-days: 7
       - uses: actions/upload-pages-artifact@v5
         if: steps.source.outputs.publish == 'true' && github.event_name != 'pull_request'
         with:
           path: public
   deploy:
-    if: github.event_name != 'pull_request' && needs.prepare.outputs.publish == 'true'
+    if: needs.prepare.outputs.publish == 'true'
     needs: prepare
     runs-on: ubuntu-24.04
     permissions:

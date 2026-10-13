@@ -21,13 +21,12 @@ validation binds clean checkout identity, manifest, complete sessions, every
 eligible file and honest known/unknown figures before publication. Unknown
 measurements must not become zero hits or fabricated complete percentages.
 
-The publisher polls at minutes 7, 22, 37 and 52 of each hour, and supports manual
-`Coverage Pages` dispatch. Scheduling may be delayed by GitHub; this is eventual
-publication, not an immediate per-core-commit trigger. Public-repository schedules
-can be disabled after 60 days without repository activity; check Actions and
-re-enable when necessary. No PAT, cross-repository write access or core workflow
-write is required if the built-in token's public artifact read succeeds. The PR
-pipeline deliberately exercises that actual download before deployment approval.
+Production publication runs only through a manual `Coverage Pages` dispatch.
+Pull requests and pushes to this repository's `main` run the separate coverage
+checks workflow and do not publish. The publisher no longer polls on a schedule,
+so stale source coverage on core `next` cannot cause recurring publisher failures.
+No PAT, cross-repository write access or core workflow write is required if the
+built-in token's public artifact read succeeds.
 
 Runs serialize under one production concurrency group. Selection happens after
 entering it and is checked again after download/build. Live provenance prevents
@@ -43,9 +42,9 @@ three identities skip deployment. Styling requires no new core collection.
 Report data, denominators, scope and independent provenance are retained.
 The overview and detailed reports use the main website’s visual design.
 
-PRs test selection and generate a preview artifact but cannot deploy. Production
-uploads only the generated report, deploys through this repository's `github-pages`
-environment and compares every live report file with the artifact. GitHub Pages
+The on-demand publisher uploads only the generated report, deploys through this
+repository's `github-pages` environment and compares every live report file with
+the artifact. GitHub Pages
 must use GitHub Actions as its source. `GITHUB_TOKEN` is read-only in preparation;
 only the deploy job has Pages/OIDC write permissions.
 
@@ -62,8 +61,20 @@ See sproates/panackelty#131 and sproates/panackelty#187.
 Independent hosting supersedes the planned combined-site coverage refresh work;
 it does not by itself establish the website's latency budgets.
 
-For an immediate refresh, start a fresh Coverage Pages workflow_dispatch on main.
-Do not rerun an old production preparation: duplicate github-pages artifacts in
-one run can make deploy-pages reject an ambiguous artifact selection.
+## Release preparation
+
+Refresh and publish source coverage as a release-preparation check, not during
+ordinary development. On the release candidate's core `next` head, request a
+fresh source collection using the documented `[source-coverage]` refresh and
+wait for its `Check` run to succeed and archive `source-coverage-RUN_ID`. Then
+start a fresh `Coverage Pages` workflow_dispatch on this repository's `main` and
+verify that live provenance identifies the intended candidate before proceeding
+with release promotion. The publisher selects reports; it does not collect
+source coverage itself. It also refreshes native coverage from core `main` when
+that report is newer.
+
+For an ad hoc refresh outside release preparation, use the same fresh manual
+dispatch. Do not rerun an old production preparation: duplicate `github-pages`
+artifacts in one run can make deploy-pages reject an ambiguous artifact selection.
 
 The report landing page and detailed reports use the main website’s always-visible primary navigation and further-reading footer. The landing page also uses the editorial exploration links. Presentation identity includes these changes, allowing a chrome-only refresh without regenerating coverage.
