@@ -95,12 +95,16 @@ test('live verification compares every file and rejects stale contents',async t=
   await verify(output,'https://example.test/');assert(visited.includes('html/source.html'));assert(visited.includes('provenance.json'));
   stale=true;await assert.rejects(verify(output,'https://example.test/'),/mismatch/);
 });
-test('workflow never deploys a PR and cross-repo artifact identity is pinned',()=>{
+test('production publication is on demand and cross-repo artifact identity is pinned',()=>{
   const workflow=fs.readFileSync('.github/workflows/publish.yml','utf8');
+  const checks=fs.readFileSync('.github/workflows/check.yml','utf8');
+  assert.match(workflow,/^on:\n  workflow_dispatch:/m);
+  assert.doesNotMatch(workflow,/^  (push|pull_request|schedule):/m);
+  assert.match(checks,/^  pull_request:/m);
+  assert.match(checks,/^  push:\n    branches: \[main\]/m);
   assert.match(workflow,/repository: sproates\/panackelty/);
   assert.match(workflow,/run-id: \$\{\{ steps.source.outputs.run \}\}/);
-  assert.match(workflow,/if: github.event_name != 'pull_request' && needs.prepare.outputs.publish == 'true'/);
-  assert.match(workflow,/cancel-in-progress: \$\{\{ github.event_name == 'pull_request' \}\}/);
+  assert.match(workflow,/if: needs.prepare.outputs.publish == 'true'/);
   assert.match(workflow,/Coverage advanced during preparation/);
   assert.match(workflow,/publicationDecision\(changes\)/);
   assert.match(workflow,/preserve the live/);
