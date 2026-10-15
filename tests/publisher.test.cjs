@@ -4,7 +4,7 @@ const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {select,validate,same,needsPublish,publicationDecision}=require('../scripts/source.cjs');
 const {build,sourceSummary,buildDual,inspect,verify,presentationIdentity,presentationNeedsPublish}=require('../scripts/report.cjs');
 const {createHash}=require('node:crypto');
-const run=(id,extra={})=>({id,run_number:id,run_attempt:1,head_sha:String(id).padStart(40,'a'),event:'push',head_branch:'main',status:'completed',conclusion:'success',path:'.github/workflows/check.yml',repository:{full_name:'sproates/panackelty'},head_repository:{full_name:'sproates/panackelty'},...extra});
+const run=(id,extra={})=>({id,run_number:id,run_attempt:1,created_at:`2026-10-01T20:00:${String(id).padStart(2,'0')}Z`,head_sha:String(id).padStart(40,'a'),event:'push',head_branch:'main',status:'completed',conclusion:'success',path:'.github/workflows/check.yml',repository:{full_name:'sproates/panackelty'},head_repository:{full_name:'sproates/panackelty'},...extra});
 const artifact=(id,extra={})=>({id:id+100,name:`native-coverage-${id}`,created_at:'2026-10-01T21:06:19Z',expired:false,...extra});
 function api(runs,reports={},status='ahead') {
   const rest={actions:{listWorkflowRuns(){},listWorkflowRunArtifacts(){}},repos:{
@@ -13,7 +13,7 @@ function api(runs,reports={},status='ahead') {
   }};
   return {rest,paginate:async(fn,args)=>{
     assert.equal(args.owner,'sproates');assert.equal(args.repo,'panackelty');
-    if(fn===rest.actions.listWorkflowRuns){assert.equal(args.workflow_id,'check.yml');return runs;}
+    if(fn===rest.actions.listWorkflowRuns){assert(['check.yml','source-coverage.yml'].includes(args.workflow_id));return runs.filter(r=>r.path===`.github/workflows/${args.workflow_id}`);}
     return reports[args.run_id]||[];
   }};
 }
@@ -95,11 +95,12 @@ test('live verification compares every file and rejects stale contents',async t=
   await verify(output,'https://example.test/');assert(visited.includes('html/source.html'));assert(visited.includes('provenance.json'));
   stale=true;await assert.rejects(verify(output,'https://example.test/'),/mismatch/);
 });
-test('production publication is on demand and cross-repo artifact identity is pinned',()=>{
+test('production publication is weekly or manual and cross-repo artifact identity is pinned',()=>{
   const workflow=fs.readFileSync('.github/workflows/publish.yml','utf8');
   const checks=fs.readFileSync('.github/workflows/check.yml','utf8');
   assert.match(workflow,/^on:\n  workflow_dispatch:/m);
-  assert.doesNotMatch(workflow,/^  (push|pull_request|schedule):/m);
+  assert.doesNotMatch(workflow,/^  (push|pull_request):/m);
+  assert.match(workflow,/cron: '23 5 \* \* 1'/);
   assert.match(checks,/^  pull_request:/m);
   assert.match(checks,/^  push:\n    branches: \[main\]/m);
   assert.match(workflow,/repository: sproates\/panackelty/);
@@ -176,4 +177,36 @@ test('malformed, stale, incomplete or dishonest source summaries cannot replace 
   const scope=clone();scope.sessions[0].id='wrong';bad.push(scope);
   for(const data of bad) {fs.writeFileSync(path.join(source,'summary.json'),JSON.stringify(data));assert.throws(()=>sourceSummary(source,sourceSelection));}
   fs.writeFileSync(path.join(source,'summary.json'),JSON.stringify(report));assert.equal(sourceSummary(source,sourceSelection).metrics.lines.percent,null);
+});
+
+ test('weekly source identity and ordering do not use workflow-local run numbers',async()=>{
+  const old=run(5,{head_branch:'next',run_number:900});
+  const weekly=run(6,{head_branch:'next',event:'workflow_dispatch',path:'.github/workflows/source-coverage.yml',run_number:1});
+  const reports={5:[artifact(5,{name:'source-coverage-5'})],6:[artifact(6,{name:'source-coverage-6'})]};
+  const selected=await select(api([old,weekly],reports),'source');
+  assert.equal(selected.check_run,6);
+  assert.equal(selected.workflow,weekly.path);
+  const live={...sourceSelection,run_number:900,archived_at:'2026-10-01T19:00:00Z'};
+  const response=value=>async()=>({status:200,ok:true,json:async()=>value});
+  assert.equal((await needsPublish(selected,'unused',response(live))).publish,true);
+  assert.equal((await needsPublish(live,'unused',response(selected))).reason,'live-newer');
+  for(const extra of [{event:'schedule'},{event:'pull_request'},{head_branch:'main'},
+    {conclusion:'failure'},{head_repository:{full_name:'fork/core'}}]) {
+    const fallback=await select(api([old,{...weekly,...extra}],reports),'source');
+    assert.equal(fallback.check_run,5);
+  }
+  const laterAttempt={...selected,run_attempt:2};
+  assert.equal((await needsPublish(selected,'unused',response(laterAttempt))).reason,'live-newer');
+  await assert.rejects(select(api([{...weekly,created_at:undefined}],reports),'source'),/creation time/);
+});
+ test('only a missing new workflow permits migration fallback; other API failures fail closed',async()=>{
+  const client=api([run(5,{head_branch:'next'})],{5:[artifact(5,{name:'source-coverage-5'})]});
+  const paginate=client.paginate;
+  client.paginate=async(fn,args)=>{
+    if(args.workflow_id==='source-coverage.yml') throw Object.assign(Error('missing workflow'),{status:404});
+    return paginate(fn,args);
+  };
+  assert.equal((await select(client,'source')).check_run,5);
+  client.paginate=async()=>{throw Object.assign(Error('forbidden'),{status:403});};
+  await assert.rejects(select(client,'source'),/forbidden/);
 });
