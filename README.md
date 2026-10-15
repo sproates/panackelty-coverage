@@ -8,9 +8,11 @@ report measures browser/WASI execution or implies whole-language coverage.
 ## Publication contract
 
 Core remains responsible for generation and validation. This repository selects
-only successful `push` runs of core's `.github/workflows/check.yml` on `main`
-for native reports and `next` for source reports, from `sproates/panackelty`
-itself. It finds the newest eligible report independently for each channel,
+only successful core `check.yml` pushes on `main` for native reports, and
+successful `source-coverage.yml` manual-dispatch runs on `next` for source reports,
+from `sproates/panackelty` itself. The weekly core scheduler dispatches that same
+`next` workflow, preserving exact run/source SHA identity. Previous successful
+`check.yml` pushes on `next` remain a migration fallback. It finds the newest eligible report independently for each channel,
 checks ancestry, rejects expired artifacts and keeps its SHA, run, attempt and
 artifact identity visible. Failed/newer or website-only checks do not erase the
 last successful report. No core source or downloaded report is executed here.
@@ -21,10 +23,13 @@ validation binds clean checkout identity, manifest, complete sessions, every
 eligible file and honest known/unknown figures before publication. Unknown
 measurements must not become zero hits or fabricated complete percentages.
 
-Production publication runs only through a manual `Coverage Pages` dispatch.
-Pull requests and pushes to this repository's `main` run the separate coverage
-checks workflow and do not publish. The publisher no longer polls on a schedule,
-so stale source coverage on core `next` cannot cause recurring publisher failures.
+Production publication runs every Monday at 05:23 UTC, after the core collection
+schedule at 03:23 UTC, and through manual **Coverage Pages** dispatch. Pull requests
+and pushes to this repository's `main` run only the separate checks workflow.
+Collection is independent of release promotion/publication; an older report is
+labelled by its timestamp and measured commit, not presented as current-release
+coverage. Failed collection leaves the latest successful report selected; failures
+in publication leave the deployed site intact and surface in GitHub Actions.
 No PAT, cross-repository write access or core workflow write is required if the
 built-in token's public artifact read succeeds.
 
@@ -42,7 +47,7 @@ three identities skip deployment. Styling requires no new core collection.
 Report data, denominators, scope and independent provenance are retained.
 The overview and detailed reports use the main website’s visual design.
 
-The on-demand publisher uploads only the generated report, deploys through this
+The publisher uploads only the generated report, deploys through this
 repository's `github-pages` environment and compares every live report file with
 the artifact. GitHub Pages
 must use GitHub Actions as its source. `GITHUB_TOKEN` is read-only in preparation;
@@ -61,20 +66,20 @@ See sproates/panackelty#131 and sproates/panackelty#187.
 Independent hosting supersedes the planned combined-site coverage refresh work;
 it does not by itself establish the website's latency budgets.
 
-## Release preparation
+## Manual collection and publication
 
-Refresh and publish source coverage as a release-preparation check, not during
-ordinary development. On the release candidate's core `next` head, request a
-fresh source collection using the documented `[source-coverage]` refresh and
-wait for its `Check` run to succeed and archive `source-coverage-RUN_ID`. Then
-start a fresh `Coverage Pages` workflow_dispatch on this repository's `main` and
-verify that live provenance identifies the intended candidate before proceeding
-with release promotion. The publisher selects reports; it does not collect
-source coverage itself. It also refreshes native coverage from core `main` when
-that report is newer.
+For an ad hoc refresh, dispatch **Source coverage** on the core repository's
+`next` branch. Wait for its successful `source-coverage-RUN_ID` artifact, then
+start a fresh **Coverage Pages** dispatch on this repository's `main`. Confirm
+live provenance identifies the selected commit and artifact. Collection and
+publication are not release prerequisites. Alpha.14 retains coverage-speed work.
 
-For an ad hoc refresh outside release preparation, use the same fresh manual
-dispatch. Do not rerun an old production preparation: duplicate `github-pages`
-artifacts in one run can make deploy-pages reject an ambiguous artifact selection.
+Source runs from separate workflows are ordered by run creation time, not their
+workflow-local run numbers. Provenance records workflow identity and creation time;
+older published provenance without those fields uses its archive timestamp during
+migration. Re-running an older source run cannot supersede a newer source run.
+
+Do not rerun an old production preparation: duplicate `github-pages` artifacts in
+one run can make deploy-pages reject ambiguous artifact selection.
 
 The report landing page and detailed reports use the main website’s always-visible primary navigation and further-reading footer. The landing page also uses the editorial exploration links. Presentation identity includes these changes, allowing a chrome-only refresh without regenerating coverage.

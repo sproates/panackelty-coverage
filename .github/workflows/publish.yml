@@ -1,6 +1,8 @@
 name: Coverage Pages
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1'
 permissions:
   contents: read
 concurrency:
@@ -45,7 +47,7 @@ jobs:
             const {publish:changed,newerLive}=publicationDecision(changes);
             for(const {decision,index} of newerLive) {
               const channel=index===0?'native':'source', selected=index===0?source:panack;
-              core.warning(`Skipping publication to preserve the live ${channel} report: live run ${decision.live.run_number}/${decision.live.run_attempt} is newer than selected run ${selected.run_number}/${selected.run_attempt}.`);
+              core.warning(`Skipping publication to preserve the live ${channel} report: live run ${decision.live.check_run}/${decision.live.run_attempt} is newer than selected run ${selected.check_run}/${selected.run_attempt}.`);
             }
             core.setOutput('publish',String(changed));
             await core.summary.addHeading('Independent coverage sources').addCodeBlock(JSON.stringify({native:source,panack,publication:changes},null,2),'json').write();

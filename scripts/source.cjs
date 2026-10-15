@@ -6,13 +6,32 @@ async function select(github, channel = 'native') {
   const sourceBranch = channel === 'source' ? 'next' : 'main';
   const prefix = channel === 'source' ? 'source' : 'native';
   const {data: branch} = await github.rest.repos.getBranch({...repository, branch: sourceBranch});
-  const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-    ...repository, workflow_id: 'check.yml', branch: sourceBranch, event: 'push', status: 'success', per_page: 100,
-  });
-  const eligible = runs.filter(r => r.event === 'push' && r.head_branch === sourceBranch &&
-    r.status === 'completed' && r.conclusion === 'success' && r.path === '.github/workflows/check.yml' &&
-    r.repository?.full_name === fullName && r.head_repository?.full_name === fullName);
-  eligible.sort((a,b) => b.run_number-a.run_number || b.run_attempt-a.run_attempt);
+  const workflows = channel === 'source'
+    ? [{id:'source-coverage.yml',event:'workflow_dispatch'},{id:'check.yml',event:'push'}]
+    : [{id:'check.yml',event:'push'}];
+  const candidates = await Promise.all(workflows.map(async ({id,event}) => {
+    let runs;
+    try {
+      runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+        ...repository, workflow_id:id, branch:sourceBranch, event, status:'success', per_page:100,
+      });
+    } catch (error) {
+      // During rollout the new workflow may not exist on main yet.
+      if (id === 'source-coverage.yml' && error.status === 404) return [];
+      throw error;
+    }
+    return runs.filter(r => r.event === event && r.head_branch === sourceBranch &&
+      r.status === 'completed' && r.conclusion === 'success' && r.path === `.github/workflows/${id}` &&
+      r.repository?.full_name === fullName && r.head_repository?.full_name === fullName);
+  }));
+  const eligible = candidates.flat();
+  // Run numbers are workflow-local. Creation time orders independent workflows;
+  // attempts order reruns of the same run without promoting older source runs.
+  if (channel === 'source') {
+    for (const run of eligible) if (!Number.isFinite(Date.parse(run.created_at)))
+      throw new Error('Missing source workflow creation time');
+    eligible.sort((a,b) => Date.parse(b.created_at)-Date.parse(a.created_at) || b.run_attempt-a.run_attempt);
+  } else eligible.sort((a,b) => b.run_number-a.run_number || b.run_attempt-a.run_attempt);
   for (const run of eligible) {
     const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
       {...repository, run_id: run.id, per_page: 100});
@@ -20,7 +39,7 @@ async function select(github, channel = 'native') {
     if (!matches.length) continue; // Website/docs runs intentionally have no native report.
     if (matches.length !== 1) throw new Error('Ambiguous coverage artifacts');
     const artifact = matches[0];
-    if (artifact.expired) throw new Error('Latest coverage expired; run full core Check');
+    if (artifact.expired) throw new Error('Latest coverage expired; collect a fresh report');
     const {data: comparison} = await github.rest.repos.compareCommits({
       ...repository, base: run.head_sha, head: branch.commit.sha,
     });
@@ -28,21 +47,24 @@ async function select(github, channel = 'native') {
     const selected = {schema: 1, repository: fullName, coverage_sha: run.head_sha,
       check_run: run.id, run_number: run.run_number, run_attempt: run.run_attempt,
       artifact_id: artifact.id, archived_at: artifact.created_at};
-    if (channel === 'source') Object.assign(selected,{schema:2,branch:'next',kind:'panack-source'});
+    if (channel === 'source') Object.assign(selected,{schema:2,branch:'next',kind:'panack-source',workflow:run.path,run_created_at:run.created_at});
     validate(selected);
     return selected;
   }
   throw new Error(`No successful ${sourceBranch} coverage report`);
 }
 function validate(s) {
-  if (![1,2].includes(s.schema) || (s.schema === 2 && (s.branch !== 'next' || s.kind !== 'panack-source')) || s.repository !== fullName || !/^[a-f0-9]{40}$/.test(s.coverage_sha) ||
+  if ((s.workflow !== undefined && !['.github/workflows/check.yml','.github/workflows/source-coverage.yml'].includes(s.workflow)) ||
+      (s.run_created_at !== undefined && (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(s.run_created_at) || !Number.isFinite(Date.parse(s.run_created_at)))) ||
+      ((s.workflow === undefined) !== (s.run_created_at === undefined)) ||
+      ![1,2].includes(s.schema) || (s.schema === 2 && (s.branch !== 'next' || s.kind !== 'panack-source')) || s.repository !== fullName || !/^[a-f0-9]{40}$/.test(s.coverage_sha) ||
       !['check_run','run_number','run_attempt','artifact_id'].every(k => Number.isSafeInteger(s[k]) && s[k] > 0) ||
       !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(s.archived_at) || !Number.isFinite(Date.parse(s.archived_at))) {
     throw new Error('Invalid coverage provenance');
   }
 }
 function same(a,b) {
-  return ['schema','branch','kind','repository','coverage_sha','check_run','run_number','run_attempt','artifact_id','archived_at'].every(k=>a[k]===b[k]);
+  return ['schema','branch','kind','repository','coverage_sha','check_run','run_number','run_attempt','artifact_id','archived_at','workflow','run_created_at'].every(k=>a[k]===b[k]);
 }
 async function needsPublish(selected, url, fetcher=fetch) {
   const response=await fetcher(url,{signal:AbortSignal.timeout(15000),cache:'no-store'});
@@ -50,8 +72,11 @@ async function needsPublish(selected, url, fetcher=fetch) {
   if (!response.ok) throw new Error('Cannot read live coverage provenance');
   const live=await response.json(); validate(live);
   if (live.schema !== selected.schema || live.branch !== selected.branch || live.kind !== selected.kind) throw new Error('Coverage channel mismatch');
-  if (live.run_number > selected.run_number ||
-      (live.run_number === selected.run_number && live.run_attempt > selected.run_attempt)) {
+  const crossWorkflow = selected.schema === 2 && (selected.workflow || live.workflow);
+  const liveOrder = crossWorkflow ? Date.parse(live.run_created_at || live.archived_at) : live.run_number;
+  const selectedOrder = crossWorkflow ? Date.parse(selected.run_created_at || selected.archived_at) : selected.run_number;
+  if (liveOrder > selectedOrder ||
+      (liveOrder === selectedOrder && live.run_attempt > selected.run_attempt)) {
     return {publish:false,reason:'live-newer',live};
   }
   return {publish:!same(live,selected),reason:null,live};
